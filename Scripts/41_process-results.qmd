@@ -1,0 +1,363 @@
+---
+title: ""
+format: 
+  docx:
+    fig-format: svg
+    fig-width: 22
+    fig-height: 12
+    fontsize: 9pt
+execute:
+  echo: false
+---
+
+```{r}
+#| eval: false
+# NOTE:
+# For diff in estimate:
+# "Male" - "Female" and "EducLow" - "EducMediumHigh"
+```
+
+
+```{r setup}
+#| output: false
+
+rm(list = ls())
+
+library(tidyverse)
+library(patchwork)
+
+source("41_functions.R")
+source("42_functions.R")
+
+options(scipen = 999)
+
+counter <- function() {
+  x <- 2
+  internal_fun <- function() {
+    x <<- x + 1
+  }
+  return(internal_fun)
+}
+count_plots <- counter()
+```
+
+```{r main}
+
+for (nm in c("mice", "cc_cases")) {
+  
+  all_results <- readRDS(paste0("Table2_all_results_", nm, ".rds"))
+  all_results$event <- NULL
+  
+  if (nm == "mice") all_results$mipo_name <- NULL
+  
+  fig_label2  <- if (nm == "mice") "multiply imputed data" else "complete cases"
+  outcomes    <- c("neuropathy", "ulcer", "all-amputation", "major-amputation")
+  outcomes    <- rep(outcomes, each = 2)
+  model_names <- rep(c("model1", "model3"), times = 4)
+  fig_label1  <- case_match(
+    outcomes, 
+    "neuropathy" ~ "peripheral neuropathy/peripheral vascular disease", 
+    "ulcer" ~ "foot ulceration", 
+    "all-amputation" ~ "amputation", 
+    "major-amputation" ~ "major amputation"
+  )
+  
+  
+  # PLOT COEFFICIENTS FOR PHYSICAL ACTIVITY ---------------------------------
+  
+  plotSize <- lapply(
+    c(unique(outcomes)), 
+    function(k) {
+      seq_along(
+        min(all_results$landmark_age[all_results$outcome == k]):
+          max(all_results$landmark_age[all_results$outcome == k])
+      )
+    })
+  
+  plotSize <- sapply(
+    seq_along(plotSize), 
+    function(k) length(plotSize[[k]]) / length(unlist(plotSize))
+  )
+  
+  out <- list()
+  for (i in seq_along(outcomes)) {
+    out[[paste0(outcomes[i], "-", model_names[i])]] <- crr_plot_results(
+      results       = all_results, 
+      y_name        = outcomes[i], 
+      model_number  = model_names[i],
+      subgroup_name = NA
+    )
+  }
+  
+  yAxis <- ggplot(data.frame(l = "log(sHR)", x = 1, y = 1)) +
+    geom_text(aes(x, y, label = l), angle = 90, size = 15, size.unit = "pt") + 
+    theme_void() +
+    coord_cartesian(clip = "off")
+  
+  for (i in c("model1", "model3")) {
+    p <- ((
+      out[[paste0("neuropathy-", i)]] | out[[paste0("ulcer-", i)]] 
+      | out[[paste0("all-amputation-", i)]] | out[[paste0("major-amputation-", i)]]
+      & ylab(NULL)) + plot_layout(axis_titles = "collect")) +
+      plot_annotation(tag_levels = "A") + 
+      plot_layout(widths = plotSize) 
+    
+    p <- cowplot::plot_grid(yAxis, p, rel_widths = c(1, 30))
+    
+    print(p)
+    
+    pdf(paste0("Results_", nm, "_plots/", "Fig1_", i, ".pdf"), width = 22, height = 12)
+    print(p)
+    dev.off()
+    
+    cat(
+      paste0("Figure S", count_plots(), ". Association between level of self-reported physical activity and the subdistribution hazard of peripheral neuropathy/peripheral vascular disease (panel A), foot ulceration (B), amputation (C), and major amputation (D), at different landmark ages, with associated 95% CI. Each physical activity category is compared with the highest category - daily walking 30 minutes or equivalent. Each point is a log-subdistribution hazard ratio, so 0 indicates no association. Results from ", fig_label2, ", and for model ", stringr::str_extract(i, "[[:digit:]]"), ".\n")
+    )
+    
+    # cat(
+      # paste0("Figure S", if (i == "model1" || nm != "mice") count_plots(), ". Association between level of self-reported physical activity and the subdistribution hazard of peripheral neuropathy/peripheral vascular disease (panel A), foot ulceration (B), amputation (C), and major amputation (D), at different landmark ages, with associated 95% CI. Each physical activity category is compared with the highest category - daily walking 30 minutes or equivalent. Each point is a log-subdistribution hazard ratio, so 0 indicates no association. Results from ", fig_label2, ", and for model ", stringr::str_extract(i, "[[:digit:]]"), ".\n")
+    # )
+  }
+  
+  if (nm == "mice") {
+    
+    ms_plot <- crr_plot_results(
+      results       = all_results, 
+      y_name        = "neuropathy", 
+      model_number  = "model3",
+      subgroup_name = NA
+    ) 
+    ms_plot <- cowplot::plot_grid(yAxis, ms_plot, rel_widths = c(1.5, 30))
+    
+    ggsave(
+      "Results_mice_plots/Fig_model3_neuro_only.pdf", 
+      plot = ms_plot, 
+      width = 6, 
+      height = 9, 
+      units = "in"
+    )
+    
+    ggsave(
+      "Results_mice_plots/Fig_model3_neuro_only.svg", 
+      plot = ms_plot, 
+      width = 6, 
+      height = 9, 
+      units = "in"
+    )
+  }
+
+    
+  # SAVE TABLE OF RESULTS ---------------------------------------------------
+  
+  all_results2 <- data.frame(lapply(
+    all_results, 
+    \(i) if (is.double(i)) finalfit::p_tidy(i, digits = 3, prefix = NULL) else i
+  ))
+  
+  writexl::write_xlsx(all_results2, paste0("Table2_all_results_", nm, ".xlsx"))
+  
+  
+  # SUBGROUP ANALYSES: DIFFERENCE IN ESTIMATES ------------------------------
+  
+  sub_analyses  <- rep(
+    list(c("Male", "Female"), c("EducLow", "EducMediumHigh")), 
+    times = 4
+  )
+  
+  subgroup_results <- list()
+  
+  out <- list()
+  for (i in seq_along(outcomes)) {
+    out[[paste0(outcomes[i], "-", sub_analyses[[i]][1])]] <- crr_plot_results(
+      results       = all_results, 
+      y_name        = outcomes[i], 
+      model_number  = "model3",
+      subgroup_name = sub_analyses[[i]]
+    )
+  }
+  
+  yAxis <- ggplot(data.frame(l = "Difference between log(sHR)", x = 1, y = 1)) +
+    geom_text(aes(x, y, label = l), angle = 90, size = 15, size.unit = "pt") + 
+    theme_void() +
+    coord_cartesian(clip = "off")
+  
+  for (i in c("Male", "EducLow")) {
+    p <- ((
+      out[[paste0("neuropathy-", i)]] | out[[paste0("ulcer-", i)]] 
+      | out[[paste0("all-amputation-", i)]] | out[[paste0("major-amputation-", i)]]
+      & ylab(NULL)) + plot_layout(axis_titles = "collect")) +
+      plot_annotation(tag_levels = "A") + 
+      plot_layout(widths = plotSize) 
+    
+    p <- cowplot::plot_grid(yAxis, p, rel_widths = c(1, 30))
+    
+    print(p)
+    
+    pdf(
+      paste0("Results_", nm, "_plots/Difference_in_estimates/", "Fig2_", i, ".pdf"), 
+      width = 22, 
+      height = 12
+    )
+    print(p)
+    dev.off()
+    
+    subgroup <- if (i == "Male") "males and females" else "low and high education"
+    
+    cat(
+      paste0("Figure S", count_plots(), ". Difference in log-subdistribution hazard ratio of peripheral neuropathy/peripheral vascular disease (panel A), foot ulceration (B), amputation (C), and major amputation (D) between ", subgroup, " at different landmark ages, with associated 95% CI. Each point is a difference in estimate, so 0 indicates no difference between groups. Results from ", fig_label2, ", and for model 3.\n")
+    )
+    
+    # cat(
+    #   paste0("Figure S", if (i == "EducLow" || nm != "mice") count_plots(), ". Difference in log-subdistribution hazard ratio of peripheral neuropathy/peripheral vascular disease (panel A), foot ulceration (B), amputation (C), and major amputation (D) between ", subgroup, " at different landmark ages, with associated 95% CI. Each point is a difference in estimate, so 0 indicates no difference between groups. Results from ", fig_label2, ", and for model 3.\n")
+    # )
+
+    unique_outcomes <- unique(outcomes)
+    
+    for (j in seq_along(unique_outcomes)) {          # PROBLEM OCCURS HERE, ONLY FOR MICE
+      sublist_name <- paste0(i, j)
+      subgroup_results[[sublist_name]] <- diff_in_estimates(
+        results = all_results, 
+        y_name = unique_outcomes[j], 
+        subgroup_name = sub_analyses[[j]]
+      )
+      
+      subgroup_results[[sublist_name]]$subgroup <- subgroup
+    }
+    
+  }
+  
+  if (nm == "mice") {
+    
+    ms_plot <- crr_plot_results(
+      results       = all_results, 
+      y_name        = "neuropathy", 
+      model_number  = "model3",
+      subgroup_name = c("Male", "Female")
+    )
+    
+    ms_plot <- cowplot::plot_grid(yAxis, ms_plot, rel_widths = c(1.5, 30))
+    
+    ggsave(
+      "Results_mice_plots/Difference_in_estimates/Fig_model3_neuro_MalesFemales_only.pdf", 
+      plot = ms_plot, 
+      width = 6, 
+      height = 9, 
+      units = "in"
+    )
+    
+    ggsave(
+      "Results_mice_plots/Difference_in_estimates/Fig_model3_neuro_MalesFemales_only.svg", 
+      plot = ms_plot, 
+      width = 6, 
+      height = 9, 
+      units = "in"
+    )
+  }
+  
+  
+  # SAVE TABLE OF RESULTS ---------------------------------------------------
+  
+  subgroup_results <- data.frame(lapply(
+    bind_rows(subgroup_results), 
+    \(i) if (is.double(i)) finalfit::p_tidy(i, digits = 3, prefix = NULL) else i
+  ))
+  
+  writexl::write_xlsx(subgroup_results, paste0("Table2_difference_in_estimates_", nm, ".xlsx"))
+}
+
+  
+# PLOT MEASURES OF PERFORMANCE --------------------------------------------
+
+results <- readRDS("Table3_performance-imputed-data.rds")
+
+results$landmark_age <- as.integer(results$landmark_age)
+
+outcomes    <- c("neuropathy", "ulcer", "all-amputation", "major-amputation")
+fig_label  <- case_match(
+  outcomes, 
+  "neuropathy" ~ "peripheral neuropathy/peripheral vascular disease", 
+  "ulcer" ~ "foot ulceration", 
+  "all-amputation" ~ "amputation", 
+  "major-amputation" ~ "major amputation"
+)
+
+for (i in seq_along(outcomes)) {
+  p <- plot_performance(results, outcomes[i])
+  print(p)
+  
+  ggsave(
+    paste0("Results_performance/", outcomes[i], ".pdf"), 
+    plot = p, 
+    width = 6, 
+    height = 9, 
+    units = "in"
+  )
+  
+  cat(paste0("Figure S", count_plots(), ". Comparison of time-dependent area under the receiver operating characteristic curve, and time-dependent Brier score, in models without (model 2) and with physical activity (model 3) for different landmark ages, at five years of follow-up, with 95% CI. If delta AUC or delta Brier is 0, it indicates that there is no change in discrimination or in performance when adding physical activity into a model that already includes the other prognostic factors. Outcome: ", fig_label[i], ".\n"))
+}
+
+
+out <- list()
+for (i in seq_along(outcomes)) {
+  out[[outcomes[i]]] <- plot_delta_performance(results, outcomes[i])
+}
+
+yAxis <- ggplot(data.frame(l = "Estimate", x = 1, y = 1)) +
+  geom_text(aes(x, y, label = l), angle = 90, size = 15, size.unit = "pt") + 
+  theme_void() +
+  coord_cartesian(clip = "off")
+
+p <- ((
+  out[["neuropathy"]] | out[["ulcer"]]
+  | out[["all-amputation"]] | out[["major-amputation"]]
+  ) & ylab(NULL)) + plot_layout(axis_titles = "collect") +
+  plot_annotation(tag_levels = "A") + 
+  plot_layout(widths = plotSize)
+
+p <- cowplot::plot_grid(yAxis, p, rel_widths = c(1, 30))
+
+print(p)
+
+pdf("Results_performance/Fig3_delta.pdf", width = 22, height = 12)
+print(p)
+dev.off()
+
+cat(
+  paste0("Figure S", count_plots(), ". Comparison of time-dependent area under the receiver operating characteristic curve, and time-dependent Brier score, between models without (model 2) and with physical activity (model 3) for different landmark ages, at five years of follow-up, with 95% CI. If delta AUC or delta Brier is 0, it indicates that there is no change in discrimination or in performance when adding physical activity into a model that already includes the other prognostic factors.\n")
+)
+
+
+ms_plot <- plot_delta_performance(results, "neuropathy")
+
+ggsave(
+  "Results_performance/Fig_delta_neuro_only.pdf", 
+  plot = ms_plot, 
+  width = 6, 
+  height = 9, 
+  units = "in"
+)
+
+ggsave(
+  "Results_performance/Fig_delta_neuro_only.svg", 
+  plot = ms_plot, 
+  width = 6, 
+  height = 9, 
+  units = "in"
+)
+
+
+# SAVE TABLE OF RESULTS ---------------------------------------------------
+
+results <- data.frame(lapply(
+  results, 
+  \(i) if (is.double(i)) finalfit::p_tidy(i, digits = 9, prefix = NULL) else i
+))
+
+writexl::write_xlsx(results, "Table3_results_performance.xlsx")
+```
+
+
+```{r}
+#| output: false
+rm(list = ls())
+```
